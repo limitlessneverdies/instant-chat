@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Watch Together</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;font-family:system-ui,monospace}
     html,body{height:100%;background:#050505;color:#f2f2f2;overflow:hidden}
@@ -13,6 +14,7 @@
     #join h1{font-size:22px;letter-spacing:2px}
     #join input{padding:12px 16px;font-size:16px;background:#111;border:1px solid #333;color:#eee;border-radius:8px;width:220px;text-align:center;outline:none}
     #join button{padding:12px 28px;font-size:15px;background:#fff;color:#000;border:none;border-radius:8px;cursor:pointer;font-weight:600}
+    #status{font-size:12px;color:#888;min-height:16px}
     #app{display:none;flex:1;flex-direction:column;min-height:0}
     #app.active{display:flex}
     #topbar{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-bottom:1px solid #1a1a1a;background:#0a0a0a}
@@ -23,7 +25,7 @@
     .tile{position:relative;background:#0a0a0a;border:1px solid #1f1f1f;border-radius:10px;overflow:hidden;min-height:220px;display:flex;align-items:center;justify-content:center}
     .tile video{width:100%;height:100%;object-fit:contain;background:#000}
     .tile .label{position:absolute;left:10px;top:10px;background:rgba(0,0,0,.65);padding:3px 9px;border-radius:6px;font-size:11px;backdrop-filter:blur(4px)}
-    .tile .status{position:absolute;right:10px;top:10px;background:rgba(0,0,0,.65);padding:3px 9px;border-radius:6px;font-size:11px;color:#6f6}
+    .tile .status{position:absolute;right:10px;top:10px;background:rgba(0,0,0,.65);padding:3px 9px;border-radius:6px;font-size:11px;color:#aa8}
     #localPreview{position:absolute;right:14px;bottom:86px;width:240px;height:150px;border:2px solid #2a2a2a;border-radius:10px;overflow:hidden;background:#000;z-index:5;box-shadow:0 8px 24px rgba(0,0,0,.6);display:none}
     #localPreview video{width:100%;height:100%;object-fit:contain}
     #localPreview .tag{position:absolute;left:8px;top:8px;background:rgba(0,0,0,.65);padding:2px 7px;border-radius:5px;font-size:10px}
@@ -55,6 +57,7 @@
     <div style="color:#888;font-size:13px">screen share + voice chat + text chat</div>
     <input id="roomIn" placeholder="room code" autocomplete="off">
     <button id="joinBtn">JOIN ROOM</button>
+    <div id="status"></div>
   </div>
 
   <div id="app">
@@ -89,28 +92,20 @@
     </div>
   </div>
 
-  <script type="module">
-    import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import {getDatabase,ref,push,onChildAdded,onChildRemoved,set,remove,onDisconnect,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
-
-    const cfg = {databaseURL:"https://anonchat-demo-default-rtdb.firebaseio.com/"};
-    const app = initializeApp(cfg);
-    const db = getDatabase(app);
-
+  <script>
     const id = Math.random().toString(36).slice(2,8);
-    let room="", peersRef;
+    let room="", client=null;
     let localMic=null, localScreen=null;
     const pcs=new Map();
     const remoteStreams=new Map();
     const remoteTiles=new Map();
     const remoteAudio=new Map();
-    let peerCount=0;
 
     const joinEl=document.getElementById("join");
     const appdiv=document.getElementById("app");
     const rin=document.getElementById("roomIn");
     const jbtn=document.getElementById("joinBtn");
-    const rhead=document.getElementById("roomHead");
+    const statusEl=document.getElementById("status");
     const topMeta=document.getElementById("meta");
     const stage=document.getElementById("stage");
     const chat=document.getElementById("chat");
@@ -129,84 +124,59 @@
     const ICE={iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"},{urls:"turn:openrelay.metered.ca:80",username:"openrelayproject",credential:"openrelayproject"},{urls:"turn:openrelay.metered.ca:443",username:"openrelayproject",credential:"openrelayproject"}]};
 
     function sanitize(v){return (v||"").trim().replace(/[^a-z0-9-_]/gi,'').slice(0,12);}
+    function updateMeta(){ topMeta.textContent="room: "+room+"  •  peers: "+remoteTiles.size; }
 
-    function updateMeta(){ topMeta.textContent="room: "+room+"  •  peers: "+peerCount; }
+    function mqttConnect(rm){
+      const url="wss://broker.emqx.io:8084/mqtt";
+      client=mqtt.connect(url,{clientId:"wt-"+id,clean:true,will:{topic:`wt/${rm}/presence/${id}`,payload:"",qos:0,retain:true}});
+      client.on("connect",()=>{
+        statusEl.textContent="connected";
+        client.subscribe(`wt/${rm}/presence/+`);
+        client.subscribe(`wt/${rm}/signal/${id}`);
+        client.subscribe(`wt/${rm}/chat`);
+        client.publish(`wt/${rm}/presence/${id}`,JSON.stringify({id}),{retain:true});
+        joinEl.classList.add("hidden");
+        appdiv.classList.add("active");
+        updateMeta();
+      });
+      client.on("error",e=>{ statusEl.textContent="broker error: "+(e&&e.message?e.message:e); });
+      client.on("reconnect",()=>{ statusEl.textContent="reconnecting…"; });
+      client.on("message",(topic,payload)=>{
+        let data=null; try{ data=JSON.parse(payload.toString()||"null"); }catch(e){ data=null; }
+        const parts=topic.split("/");
+        if(topic.startsWith(`wt/${rm}/presence/`)){
+          const pid=parts[parts.length-1];
+          if(pid===id) return;
+          if(data){ ensurePeer(pid); if(id<pid) maybeOffer(pid); updateMeta(); }
+          else removePeer(pid);
+        } else if(topic===`wt/${rm}/signal/${id}`){
+          if(!data) return;
+          handleSignal(data);
+        } else if(topic===`wt/${rm}/chat`){
+          if(!data) return;
+          const div=document.createElement("div");
+          div.className="msg"+(data.id===id?" me":"");
+          if(data.id!==id){const w=document.createElement("div");w.className="who";w.textContent=data.id;div.appendChild(w);}
+          const t=document.createElement("div");t.textContent=data.text;div.appendChild(t);
+          chat.appendChild(div);
+          chat.scrollTop=chat.scrollHeight;
+        }
+      });
+    }
 
     async function joinRoom(){
       room=sanitize(rin.value);
       if(!room) room="lobby";
+      statusEl.textContent="connecting mic…";
       try{ localMic=await navigator.mediaDevices.getUserMedia({audio:true}); }
-      catch(e){ localMic=null; }
-      joinEl.classList.add("hidden");
-      appdiv.classList.add("active");
-      updateMeta();
-
-      const myRef=ref(db,"rooms/"+room+"/peers/"+id);
-      await set(myRef,{joined:Date.now()});
-      onDisconnect(myRef).remove();
-
-      peersRef=ref(db,"rooms/"+room+"/peers");
-      onChildAdded(peersRef,snap=>{
-        const rid=snap.key;
-        if(rid===id) return;
-        ensurePeer(rid);
-        if(id<rid) maybeOffer(rid);
-        refreshCount();
-      });
-      onChildRemoved(peersRef,snap=>{
-        removePeer(snap.key);
-        refreshCount();
-      });
-
-      const mySignals=ref(db,"rooms/"+room+"/signals/"+id);
-      onChildAdded(mySignals,fromSnap=>{
-        const fromId=fromSnap.key;
-        const offersRef=ref(db,"rooms/"+room+"/signals/"+id+"/"+fromId+"/offers");
-        const answersRef=ref(db,"rooms/"+room+"/signals/"+id+"/"+fromId+"/answers");
-        const candsRef=ref(db,"rooms/"+room+"/signals/"+id+"/"+fromId+"/candidates");
-        onChildAdded(offersRef,async s=>{
-          const pc=ensurePeer(fromId);
-          try{
-            await pc.setRemoteDescription(new RTCSessionDescription(s.val().sdp));
-            const ans=await pc.createAnswer();
-            await pc.setLocalDescription(ans);
-            push(ref(db,"rooms/"+room+"/signals/"+fromId+"/"+id+"/answers"),{sdp:pc.localDescription});
-          }catch(e){}
-          remove(s.ref);
-        });
-        onChildAdded(answersRef,async s=>{
-          const pc=pcs.get(fromId);
-          if(pc){
-            try{ await pc.setRemoteDescription(new RTCSessionDescription(s.val().sdp)); }catch(e){}
-          }
-          remove(s.ref);
-        });
-        onChildAdded(candsRef,async s=>{
-          const pc=pcs.get(fromId);
-          if(pc && s.val().candidate){
-            try{ await pc.addIceCandidate(new RTCIceCandidate(s.val().candidate)); }catch(e){}
-          }
-          remove(s.ref);
-        });
-      });
-
-      const chatRef=ref(db,"rooms/"+room+"/chat");
-      onChildAdded(chatRef,s=>{
-        const d=s.val();
-        const div=document.createElement("div");
-        div.className="msg"+(d.id===id?" me":"");
-        if(d.id!==id){const w=document.createElement("div");w.className="who";w.textContent=d.id;div.appendChild(w);}
-        const t=document.createElement("div");t.textContent=d.text;div.appendChild(t);
-        chat.appendChild(div);
-        chat.scrollTop=chat.scrollHeight;
-      });
-      refreshCount();
+      catch(e){ localMic=null; statusEl.textContent="mic denied (voice disabled)"; }
+      statusEl.textContent="connecting broker…";
+      mqttConnect(room);
     }
 
-    function refreshCount(){
-      // count peers from db snapshot not tracked; approximate via tiles
-      peerCount=remoteTiles.size;
-      updateMeta();
+    function sendSignal(to,type,data){
+      if(!client) return;
+      client.publish(`wt/${room}/signal/${to}`,JSON.stringify({from:id,type,data}));
     }
 
     function ensurePeer(rid){
@@ -216,7 +186,7 @@
       if(localMic) localMic.getTracks().forEach(t=>pc.addTrack(t,localMic));
       if(localScreen) localScreen.getTracks().forEach(t=>pc.addTrack(t,localScreen));
       pc.onicecandidate=e=>{
-        if(e.candidate) push(ref(db,"rooms/"+room+"/signals/"+rid+"/"+id+"/candidates"),{candidate:e.candidate});
+        if(e.candidate) sendSignal(rid,"candidate",e.candidate);
       };
       pc.ontrack=e=>{
         let stream=remoteStreams.get(rid);
@@ -244,7 +214,24 @@
       try{
         const offer=await pc.createOffer();
         await pc.setLocalDescription(offer);
-        push(ref(db,"rooms/"+room+"/signals/"+rid+"/"+id+"/offers"),{sdp:pc.localDescription});
+        sendSignal(rid,"offer",pc.localDescription);
+      }catch(e){}
+    }
+
+    async function handleSignal(msg){
+      const fromId=msg.from;
+      const pc=ensurePeer(fromId);
+      try{
+        if(msg.type==="offer"){
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+          const ans=await pc.createAnswer();
+          await pc.setLocalDescription(ans);
+          sendSignal(fromId,"answer",pc.localDescription);
+        } else if(msg.type==="answer"){
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+        } else if(msg.type==="candidate"){
+          await pc.addIceCandidate(new RTCIceCandidate(msg.data));
+        }
       }catch(e){}
     }
 
@@ -254,7 +241,7 @@
       try{
         const offer=await pc.createOffer();
         await pc.setLocalDescription(offer);
-        push(ref(db,"rooms/"+room+"/signals/"+rid+"/"+id+"/offers"),{sdp:pc.localDescription});
+        sendSignal(rid,"offer",pc.localDescription);
       }catch(e){}
     }
 
@@ -295,7 +282,7 @@
       const a=remoteAudio.get(rid);
       if(a) a.remove();
       remoteAudio.delete(rid);
-      refreshCount();
+      updateMeta();
     }
 
     async function startShare(){
@@ -345,15 +332,17 @@
     chatBtn.onclick=()=>{ chatPanel.classList.toggle("hidden"); chatBtn.classList.toggle("active",!chatPanel.classList.contains("hidden")); };
     chatToggle.onclick=()=>{ chatPanel.classList.add("hidden"); };
     fsBtn.onclick=async()=>{ try{ if(!document.fullscreenElement) await document.documentElement.requestFullscreen(); else await document.exitFullscreen(); }catch(e){} };
-    leaveBtn.onclick=()=>location.reload();
+    leaveBtn.onclick=()=>{ if(client) client.end(); location.reload(); };
 
     form.onsubmit=e=>{
       e.preventDefault();
       const t=msg.value.trim();
-      if(!t) return;
-      push(ref(db,"rooms/"+room+"/chat"),{id,text:t,ts:serverTimestamp()});
+      if(!t || !client) return;
+      client.publish(`wt/${room}/chat`,JSON.stringify({id,text:t,ts:Date.now()}));
       msg.value="";
     };
+
+    window.addEventListener("beforeunload",()=>{ if(client){ client.publish(`wt/${room}/presence/${id}`,"",{retain:true}); client.end(); } });
   </script>
 </body>
 </html>

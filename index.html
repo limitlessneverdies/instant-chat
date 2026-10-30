@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Watch Together</title>
-  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="./mqtt.min.js"></script>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;font-family:system-ui,monospace}
     html,body{height:100%;background:#050505;color:#f2f2f2;overflow:hidden}
@@ -100,6 +100,7 @@
     const remoteStreams=new Map();
     const remoteTiles=new Map();
     const remoteAudio=new Map();
+    const seenChat=new Set();
 
     const joinEl=document.getElementById("join");
     const appdiv=document.getElementById("app");
@@ -154,6 +155,8 @@
           handleSignal(data);
         } else if(topic===`wt/${rm}/chat`){
           if(!data) return;
+          if(data.mid && seenChat.has(data.mid)) return;
+          if(data.mid) seenChat.add(data.mid);
           const div=document.createElement("div");
           div.className="msg"+(data.id===id?" me":"");
           if(data.id!==id){const w=document.createElement("div");w.className="who";w.textContent=data.id;div.appendChild(w);}
@@ -338,7 +341,14 @@
       e.preventDefault();
       const t=msg.value.trim();
       if(!t || !client) return;
-      client.publish(`wt/${room}/chat`,JSON.stringify({id,text:t,ts:Date.now()}));
+      const mid=Math.random().toString(36).slice(2,10);
+      seenChat.add(mid);
+      const div=document.createElement("div");
+      div.className="msg me";
+      const tt=document.createElement("div");tt.textContent=t;div.appendChild(tt);
+      chat.appendChild(div);
+      chat.scrollTop=chat.scrollHeight;
+      client.publish(`wt/${room}/chat`,JSON.stringify({id,text:t,ts:Date.now(),mid}));
       msg.value="";
     };
 

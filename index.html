@@ -5,53 +5,88 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Watch Together</title>
   <style>
-    *{margin:0;padding:0;box-sizing:border-box;font-family:monospace}
-    body{background:#000;color:#eee;height:100dvh;display:flex;flex-direction:column}
-    #join{display:flex;align-items:center;justify-content:center;height:100dvh;flex-direction:column;gap:10px;text-align:center}
+    *{margin:0;padding:0;box-sizing:border-box;font-family:system-ui,monospace}
+    html,body{height:100%;background:#050505;color:#f2f2f2;overflow:hidden}
+    body{display:flex;flex-direction:column}
+    #join{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;text-align:center;background:#050505;z-index:10}
     #join.hidden{display:none}
-    #app{display:none;flex-direction:column;height:100dvh}
+    #join h1{font-size:22px;letter-spacing:2px}
+    #join input{padding:12px 16px;font-size:16px;background:#111;border:1px solid #333;color:#eee;border-radius:8px;width:220px;text-align:center;outline:none}
+    #join button{padding:12px 28px;font-size:15px;background:#fff;color:#000;border:none;border-radius:8px;cursor:pointer;font-weight:600}
+    #app{display:none;flex:1;flex-direction:column;min-height:0}
     #app.active{display:flex}
-    header{padding:10px;border-bottom:1px solid #222;text-align:center;font-size:12px}
-    #bar{display:flex;gap:6px;padding:10px;border-bottom:1px solid #222;flex-wrap:wrap}
-    button{padding:8px 14px;background:#eee;color:#000;border:none;cursor:pointer}
-    button.off{background:#333;color:#eee}
-    #videos{flex:1;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;padding:8px;overflow:auto}
-    .tile{background:#111;position:relative;min-height:160px}
-    video{width:100%;height:100%;object-fit:contain;background:#000}
-    .label{position:absolute;left:6px;top:6px;background:#000aa;padding:2px 6px;font-size:11px}
-    #chat{height:180px;overflow-y:auto;padding:8px;border-top:1px solid #222;display:flex;flex-direction:column;gap:4px}
-    .msg{max-width:80%;padding:4px 8px;background:#151515;word-break:break-word;font-size:12px}
-    .me{align-self:flex-end;background:#333}
-    #form{display:flex;gap:6px;padding:8px;border-top:1px solid #222}
-    #roomIn,#msg{flex:1;padding:8px;background:#000;border:1px solid #333;color:#eee;outline:none}
-    #localWrap{padding:8px;border-top:1px solid #222}
-    #localScreen{width:100%;max-height:180px;background:#000}
+    #topbar{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-bottom:1px solid #1a1a1a;background:#0a0a0a}
+    #topbar .title{font-size:13px;font-weight:600;letter-spacing:1px}
+    #topbar .meta{font-size:12px;color:#888}
+    #main{flex:1;display:flex;min-height:0}
+    #stage{flex:1;position:relative;padding:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px;overflow:auto;align-content:start}
+    .tile{position:relative;background:#0a0a0a;border:1px solid #1f1f1f;border-radius:10px;overflow:hidden;min-height:220px;display:flex;align-items:center;justify-content:center}
+    .tile video{width:100%;height:100%;object-fit:contain;background:#000}
+    .tile .label{position:absolute;left:10px;top:10px;background:rgba(0,0,0,.65);padding:3px 9px;border-radius:6px;font-size:11px;backdrop-filter:blur(4px)}
+    .tile .status{position:absolute;right:10px;top:10px;background:rgba(0,0,0,.65);padding:3px 9px;border-radius:6px;font-size:11px;color:#6f6}
+    #localPreview{position:absolute;right:14px;bottom:86px;width:240px;height:150px;border:2px solid #2a2a2a;border-radius:10px;overflow:hidden;background:#000;z-index:5;box-shadow:0 8px 24px rgba(0,0,0,.6)}
+    #localPreview video{width:100%;height:100%;object-fit:contain}
+    #localPreview .tag{position:absolute;left:8px;top:8px;background:rgba(0,0,0,.65);padding:2px 7px;border-radius:5px;font-size:10px}
+    #controls{position:absolute;left:50%;transform:translateX(-50%);bottom:18px;display:flex;gap:8px;z-index:6;background:rgba(10,10,10,.75);padding:8px 10px;border-radius:14px;backdrop-filter:blur(8px);border:1px solid #222}
+    .btn{padding:10px 16px;background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:10px;cursor:pointer;font-size:13px;font-weight:500;transition:.15s}
+    .btn:hover{background:#262626}
+    .btn.primary{background:#fff;color:#000;border-color:#fff}
+    .btn.danger{background:#3a1111;color:#ff8a8a;border-color:#5a1a1a}
+    .btn.active{background:#1f3a1f;color:#8fff8f;border-color:#2f5a2f}
+    #chatPanel{width:340px;display:flex;flex-direction:column;border-left:1px solid #1a1a1a;background:#080808}
+    #chatPanel.hidden{display:none}
+    #chatHead{padding:10px 12px;border-bottom:1px solid #1a1a1a;font-size:12px;font-weight:600;letter-spacing:1px;display:flex;justify-content:space-between;align-items:center}
+    #chat{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:6px}
+    .msg{max-width:85%;padding:7px 10px;background:#151515;border-radius:8px;word-break:break-word;font-size:13px;line-height:1.35}
+    .msg.me{align-self:flex-end;background:#262626}
+    .msg .who{font-size:10px;color:#777;margin-bottom:2px}
+    #form{display:flex;gap:6px;padding:8px;border-top:1px solid #1a1a1a}
+    #msg{flex:1;padding:9px 10px;background:#0f0f0f;border:1px solid #2a2a2a;color:#eee;border-radius:8px;outline:none;font-size:13px}
+    #send{padding:9px 14px;background:#fff;color:#000;border:none;border-radius:8px;cursor:pointer;font-weight:600}
+    @media (max-width:760px){
+      #chatPanel{position:absolute;inset:0;z-index:7;width:100%}
+      #localPreview{width:160px;height:100px;bottom:78px}
+    }
   </style>
 </head>
 <body>
   <div id="join">
-    <div>ENTER ROOM CODE</div>
-    <input id="roomIn" placeholder="e.g bro" autocomplete="off">
-    <button id="joinBtn">JOIN</button>
+    <h1>WATCH TOGETHER</h1>
+    <div style="color:#888;font-size:13px">screen share + voice chat + text chat</div>
+    <input id="roomIn" placeholder="room code" autocomplete="off">
+    <button id="joinBtn">JOIN ROOM</button>
   </div>
 
   <div id="app">
-    <header id="roomHead">ROOM:</header>
-    <div id="bar">
-      <button id="shareBtn">SHARE SCREEN</button>
-      <button id="muteBtn">MUTE MIC</button>
-      <button id="leaveBtn">LEAVE</button>
+    <div id="topbar">
+      <div class="title">WATCH TOGETHER</div>
+      <div class="meta" id="meta">connecting…</div>
     </div>
-    <div id="videos"></div>
-    <div id="localWrap">
-      <div style="font-size:11px;margin-bottom:4px">YOUR SCREEN (preview)</div>
+    <div id="main">
+      <div id="stage"></div>
+      <div id="chatPanel">
+        <div id="chatHead">
+          <span>CHAT</span>
+          <button class="btn" id="chatToggle" style="padding:4px 10px;font-size:11px">HIDE</button>
+        </div>
+        <div id="chat"></div>
+        <form id="form">
+          <input id="msg" placeholder="message…" autocomplete="off" required>
+          <button id="send">SEND</button>
+        </form>
+      </div>
+    </div>
+    <div id="localPreview">
       <video id="localScreen" autoplay muted playsinline></video>
+      <div class="tag">YOU (screen)</div>
     </div>
-    <div id="chat"></div>
-    <form id="form">
-      <input id="msg" placeholder="type..." autocomplete="off" required>
-      <button id="send">SEND</button>
-    </form>
+    <div id="controls">
+      <button class="btn primary" id="shareBtn">SHARE SCREEN</button>
+      <button class="btn" id="muteBtn">MUTE MIC</button>
+      <button class="btn" id="chatBtn">CHAT</button>
+      <button class="btn" id="fsBtn">FULLSCREEN</button>
+      <button class="btn danger" id="leaveBtn">LEAVE</button>
+    </div>
   </div>
 
   <script type="module">
@@ -63,24 +98,30 @@
     const db = getDatabase(app);
 
     const id = Math.random().toString(36).slice(2,8);
-    let room="", peersRef, signalsRef;
+    let room="", peersRef;
     let localMic=null, localScreen=null;
     const pcs=new Map();
     const remoteStreams=new Map();
     const remoteTiles=new Map();
     const remoteAudio=new Map();
+    let peerCount=0;
 
     const joinEl=document.getElementById("join");
     const appdiv=document.getElementById("app");
     const rin=document.getElementById("roomIn");
     const jbtn=document.getElementById("joinBtn");
     const rhead=document.getElementById("roomHead");
+    const topMeta=document.getElementById("meta");
+    const stage=document.getElementById("stage");
     const chat=document.getElementById("chat");
     const form=document.getElementById("form");
     const msg=document.getElementById("msg");
-    const videos=document.getElementById("videos");
+    const chatPanel=document.getElementById("chatPanel");
+    const chatToggle=document.getElementById("chatToggle");
     const shareBtn=document.getElementById("shareBtn");
     const muteBtn=document.getElementById("muteBtn");
+    const chatBtn=document.getElementById("chatBtn");
+    const fsBtn=document.getElementById("fsBtn");
     const leaveBtn=document.getElementById("leaveBtn");
     const localScreenEl=document.getElementById("localScreen");
 
@@ -88,14 +129,16 @@
 
     function sanitize(v){return (v||"").trim().replace(/[^a-z0-9-_]/gi,'').slice(0,12);}
 
+    function updateMeta(){ topMeta.textContent="room: "+room+"  •  peers: "+peerCount; }
+
     async function joinRoom(){
       room=sanitize(rin.value);
       if(!room) room="lobby";
       try{ localMic=await navigator.mediaDevices.getUserMedia({audio:true}); }
-      catch(e){ localMic=null; alert("Mic permission needed for voice chat"); }
+      catch(e){ localMic=null; }
       joinEl.classList.add("hidden");
       appdiv.classList.add("active");
-      rhead.textContent="ROOM: "+room;
+      updateMeta();
 
       const myRef=ref(db,"rooms/"+room+"/peers/"+id);
       await set(myRef,{joined:Date.now()});
@@ -107,8 +150,12 @@
         if(rid===id) return;
         ensurePeer(rid);
         if(id<rid) maybeOffer(rid);
+        refreshCount();
       });
-      onChildRemoved(peersRef,snap=>removePeer(snap.key));
+      onChildRemoved(peersRef,snap=>{
+        removePeer(snap.key);
+        refreshCount();
+      });
 
       const mySignals=ref(db,"rooms/"+room+"/signals/"+id);
       onChildAdded(mySignals,fromSnap=>{
@@ -147,10 +194,18 @@
         const d=s.val();
         const div=document.createElement("div");
         div.className="msg"+(d.id===id?" me":"");
-        div.textContent=d.text;
+        if(d.id!==id){const w=document.createElement("div");w.className="who";w.textContent=d.id;div.appendChild(w);}
+        const t=document.createElement("div");t.textContent=d.text;div.appendChild(t);
         chat.appendChild(div);
         chat.scrollTop=chat.scrollHeight;
       });
+      refreshCount();
+    }
+
+    function refreshCount(){
+      // count peers from db snapshot not tracked; approximate via tiles
+      peerCount=remoteTiles.size;
+      updateMeta();
     }
 
     function ensurePeer(rid){
@@ -171,6 +226,11 @@
       };
       pc.onconnectionstatechange=()=>{
         if(pc.connectionState==="failed") try{pc.restartIce();}catch(e){}
+        const t=remoteTiles.get(rid);
+        if(t && t.status){
+          t.status.textContent=pc.connectionState;
+          t.status.style.color = pc.connectionState==="connected"?"#6f6":pc.connectionState==="failed"?"#f66":"#aa8";
+        }
       };
       createTile(rid);
       return pc;
@@ -205,9 +265,11 @@
       v.autoplay=true;v.playsInline=true;
       const lab=document.createElement("div");
       lab.className="label";lab.textContent=rid;
-      tile.appendChild(v);tile.appendChild(lab);
-      videos.appendChild(tile);
-      remoteTiles.set(rid,{tile,video:v});
+      const st=document.createElement("div");
+      st.className="status";st.textContent="connecting";
+      tile.appendChild(v);tile.appendChild(lab);tile.appendChild(st);
+      stage.appendChild(tile);
+      remoteTiles.set(rid,{tile,video:v,status:st});
       const a=document.createElement("audio");
       a.autoplay=true;
       document.body.appendChild(a);
@@ -216,9 +278,7 @@
 
     function renderRemote(rid,stream){
       const t=remoteTiles.get(rid);
-      if(t){
-        t.video.srcObject=stream;
-      }
+      if(t) t.video.srcObject=stream;
       const a=remoteAudio.get(rid);
       if(a) a.srcObject=stream;
     }
@@ -229,11 +289,12 @@
       pcs.delete(rid);
       remoteStreams.delete(rid);
       const t=remoteTiles.get(rid);
-      if(t){t.tile.remove();}
+      if(t) t.tile.remove();
       remoteTiles.delete(rid);
       const a=remoteAudio.get(rid);
       if(a) a.remove();
       remoteAudio.delete(rid);
+      refreshCount();
     }
 
     async function startShare(){
@@ -245,7 +306,7 @@
         });
         localScreenEl.srcObject=localScreen;
         shareBtn.textContent="STOP SHARE";
-        shareBtn.classList.add("off");
+        shareBtn.classList.add("active");
         for(const rid of pcs.keys()) await renegotiate(rid);
       }catch(e){}
     }
@@ -262,7 +323,7 @@
       localScreen=null;
       localScreenEl.srcObject=null;
       shareBtn.textContent="SHARE SCREEN";
-      shareBtn.classList.remove("off");
+      shareBtn.classList.remove("active");
       for(const rid of pcs.keys()) renegotiate(rid);
     }
 
@@ -271,13 +332,16 @@
       const enabled=localMic.getAudioTracks().some(t=>t.enabled);
       localMic.getAudioTracks().forEach(t=>t.enabled=!enabled);
       muteBtn.textContent=enabled?"UNMUTE":"MUTE MIC";
-      muteBtn.classList.toggle("off",enabled);
+      muteBtn.classList.toggle("active",!enabled);
     }
 
     jbtn.onclick=joinRoom;
     rin.addEventListener("keydown",e=>{if(e.key==="Enter") joinRoom();});
     shareBtn.onclick=()=>{ if(localScreen) stopShare(); else startShare(); };
     muteBtn.onclick=toggleMute;
+    chatBtn.onclick=()=>{ chatPanel.classList.toggle("hidden"); chatBtn.classList.toggle("active",!chatPanel.classList.contains("hidden")); };
+    chatToggle.onclick=()=>{ chatPanel.classList.add("hidden"); };
+    fsBtn.onclick=async()=>{ try{ if(!document.fullscreenElement) await document.documentElement.requestFullscreen(); else await document.exitFullscreen(); }catch(e){} };
     leaveBtn.onclick=()=>location.reload();
 
     form.onsubmit=e=>{

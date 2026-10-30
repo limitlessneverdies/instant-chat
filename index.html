@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Instant Chat</title>
+  <title>Watch Together</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;font-family:monospace}
     body{background:#000;color:#eee;height:100dvh;display:flex;flex-direction:column}
@@ -12,12 +12,20 @@
     #app{display:none;flex-direction:column;height:100dvh}
     #app.active{display:flex}
     header{padding:10px;border-bottom:1px solid #222;text-align:center;font-size:12px}
-    #chat{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
-    .msg{max-width:80%;padding:6px 10px;background:#151515;word-break:break-word}
+    #bar{display:flex;gap:6px;padding:10px;border-bottom:1px solid #222;flex-wrap:wrap}
+    button{padding:8px 14px;background:#eee;color:#000;border:none;cursor:pointer}
+    button.off{background:#333;color:#eee}
+    #videos{flex:1;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;padding:8px;overflow:auto}
+    .tile{background:#111;position:relative;min-height:160px}
+    video{width:100%;height:100%;object-fit:contain;background:#000}
+    .label{position:absolute;left:6px;top:6px;background:#000aa;padding:2px 6px;font-size:11px}
+    #chat{height:180px;overflow-y:auto;padding:8px;border-top:1px solid #222;display:flex;flex-direction:column;gap:4px}
+    .msg{max-width:80%;padding:4px 8px;background:#151515;word-break:break-word;font-size:12px}
     .me{align-self:flex-end;background:#333}
-    #form{display:flex;gap:6px;padding:10px;border-top:1px solid #222}
+    #form{display:flex;gap:6px;padding:8px;border-top:1px solid #222}
     #roomIn,#msg{flex:1;padding:8px;background:#000;border:1px solid #333;color:#eee;outline:none}
-    #joinBtn,#send{padding:8px 14px;background:#eee;color:#000;border:none;cursor:pointer}
+    #localWrap{padding:8px;border-top:1px solid #222}
+    #localScreen{width:100%;max-height:180px;background:#000}
   </style>
 </head>
 <body>
@@ -29,6 +37,16 @@
 
   <div id="app">
     <header id="roomHead">ROOM:</header>
+    <div id="bar">
+      <button id="shareBtn">SHARE SCREEN</button>
+      <button id="muteBtn">MUTE MIC</button>
+      <button id="leaveBtn">LEAVE</button>
+    </div>
+    <div id="videos"></div>
+    <div id="localWrap">
+      <div style="font-size:11px;margin-bottom:4px">YOUR SCREEN (preview)</div>
+      <video id="localScreen" autoplay muted playsinline></video>
+    </div>
     <div id="chat"></div>
     <form id="form">
       <input id="msg" placeholder="type..." autocomplete="off" required>
@@ -38,50 +56,236 @@
 
   <script type="module">
     import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import {getDatabase,ref,push,onChildAdded,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+    import {getDatabase,ref,push,onChildAdded,onChildRemoved,set,remove,onDisconnect,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
     const cfg = {databaseURL:"https://anonchat-demo-default-rtdb.firebaseio.com/"};
     const app = initializeApp(cfg);
     const db = getDatabase(app);
 
-    const id = Math.random().toString(36).slice(2,6);
-    let room="", refm;
+    const id = Math.random().toString(36).slice(2,8);
+    let room="", peersRef, signalsRef;
+    let localMic=null, localScreen=null;
+    const pcs=new Map();
+    const remoteStreams=new Map();
+    const remoteTiles=new Map();
+    const remoteAudio=new Map();
 
-    const join = document.getElementById("join");
-    const appdiv = document.getElementById("app");
-    const rin = document.getElementById("roomIn");
-    const jbtn = document.getElementById("joinBtn");
-    const rhead = document.getElementById("roomHead");
-    const chat = document.getElementById("chat");
-    const form = document.getElementById("form");
-    const msg = document.getElementById("msg");
+    const joinEl=document.getElementById("join");
+    const appdiv=document.getElementById("app");
+    const rin=document.getElementById("roomIn");
+    const jbtn=document.getElementById("joinBtn");
+    const rhead=document.getElementById("roomHead");
+    const chat=document.getElementById("chat");
+    const form=document.getElementById("form");
+    const msg=document.getElementById("msg");
+    const videos=document.getElementById("videos");
+    const shareBtn=document.getElementById("shareBtn");
+    const muteBtn=document.getElementById("muteBtn");
+    const leaveBtn=document.getElementById("leaveBtn");
+    const localScreenEl=document.getElementById("localScreen");
 
-    function joinRoom(){
-      room = rin.value.trim().replace(/[^a-z0-9-_]/gi,'').slice(0,12);
-      if(!room) room = "lobby";
-      join.classList.add("hidden");
+    const ICE={iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]};
+
+    function sanitize(v){return (v||"").trim().replace(/[^a-z0-9-_]/gi,'').slice(0,12);}
+
+    async function joinRoom(){
+      room=sanitize(rin.value);
+      if(!room) room="lobby";
+      try{ localMic=await navigator.mediaDevices.getUserMedia({audio:true}); }
+      catch(e){ localMic=null; alert("Mic permission needed for voice chat"); }
+      joinEl.classList.add("hidden");
       appdiv.classList.add("active");
-      rhead.textContent = "ROOM: " + room;
-      refm = ref(db, "rooms/"+room+"/messages");
-      onChildAdded(refm, s=>{
-        const d = s.val();
-        const div = document.createElement("div");
-        div.className = "msg" + (d.id===id ? " me" : "");
-        div.textContent = d.text;
+      rhead.textContent="ROOM: "+room;
+
+      const myRef=ref(db,"rooms/"+room+"/peers/"+id);
+      await set(myRef,{joined:Date.now()});
+      onDisconnect(myRef).remove();
+
+      peersRef=ref(db,"rooms/"+room+"/peers");
+      onChildAdded(peersRef,snap=>{
+        const rid=snap.key;
+        if(rid===id) return;
+        ensurePeer(rid);
+        if(id<rid) maybeOffer(rid);
+      });
+      onChildRemoved(peersRef,snap=>removePeer(snap.key));
+
+      const mySignals=ref(db,"rooms/"+room+"/signals/"+id);
+      onChildAdded(mySignals,fromSnap=>{
+        const fromId=fromSnap.key;
+        const offersRef=ref(db,"rooms/"+room+"/signals/"+id+"/"+fromId+"/offers");
+        const answersRef=ref(db,"rooms/"+room+"/signals/"+id+"/"+fromId+"/answers");
+        const candsRef=ref(db,"rooms/"+room+"/signals/"+id+"/"+fromId+"/candidates");
+        onChildAdded(offersRef,async s=>{
+          const pc=ensurePeer(fromId);
+          try{
+            await pc.setRemoteDescription(new RTCSessionDescription(s.val().sdp));
+            const ans=await pc.createAnswer();
+            await pc.setLocalDescription(ans);
+            push(ref(db,"rooms/"+room+"/signals/"+fromId+"/"+id+"/answers"),{sdp:pc.localDescription});
+          }catch(e){}
+          remove(s.ref);
+        });
+        onChildAdded(answersRef,async s=>{
+          const pc=pcs.get(fromId);
+          if(pc){
+            try{ await pc.setRemoteDescription(new RTCSessionDescription(s.val().sdp)); }catch(e){}
+          }
+          remove(s.ref);
+        });
+        onChildAdded(candsRef,async s=>{
+          const pc=pcs.get(fromId);
+          if(pc && s.val().candidate){
+            try{ await pc.addIceCandidate(new RTCIceCandidate(s.val().candidate)); }catch(e){}
+          }
+          remove(s.ref);
+        });
+      });
+
+      const chatRef=ref(db,"rooms/"+room+"/chat");
+      onChildAdded(chatRef,s=>{
+        const d=s.val();
+        const div=document.createElement("div");
+        div.className="msg"+(d.id===id?" me":"");
+        div.textContent=d.text;
         chat.appendChild(div);
-        chat.scrollTop = chat.scrollHeight;
+        chat.scrollTop=chat.scrollHeight;
       });
     }
 
-    jbtn.onclick = joinRoom;
-    rin.addEventListener("keydown", e=>{ if(e.key==="Enter") joinRoom(); });
+    function ensurePeer(rid){
+      if(pcs.has(rid)) return pcs.get(rid);
+      const pc=new RTCPeerConnection(ICE);
+      pcs.set(rid,pc);
+      if(localMic) localMic.getTracks().forEach(t=>pc.addTrack(t,localMic));
+      if(localScreen) localScreen.getTracks().forEach(t=>pc.addTrack(t,localScreen));
+      pc.onicecandidate=e=>{
+        if(e.candidate) push(ref(db,"rooms/"+room+"/signals/"+rid+"/"+id+"/candidates"),{candidate:e.candidate});
+      };
+      pc.ontrack=e=>{
+        let stream=remoteStreams.get(rid);
+        if(!stream){stream=new MediaStream();remoteStreams.set(rid,stream);}
+        if(!stream.getTracks().some(t=>t.id===e.track.id)) stream.addTrack(e.track);
+        renderRemote(rid,stream);
+        e.track.onended=()=>renderRemote(rid,stream);
+      };
+      pc.onconnectionstatechange=()=>{
+        if(pc.connectionState==="failed") try{pc.restartIce();}catch(e){}
+      };
+      createTile(rid);
+      return pc;
+    }
 
-    form.onsubmit = e=>{
+    async function maybeOffer(rid){
+      const pc=pcs.get(rid);
+      if(!pc || pc.signalingState!=="stable") return;
+      if(pc.localDescription && pc.localDescription.type==="offer") return;
+      try{
+        const offer=await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        push(ref(db,"rooms/"+room+"/signals/"+rid+"/"+id+"/offers"),{sdp:pc.localDescription});
+      }catch(e){}
+    }
+
+    async function renegotiate(rid){
+      const pc=pcs.get(rid);
+      if(!pc || pc.signalingState!=="stable") return;
+      try{
+        const offer=await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        push(ref(db,"rooms/"+room+"/signals/"+rid+"/"+id+"/offers"),{sdp:pc.localDescription});
+      }catch(e){}
+    }
+
+    function createTile(rid){
+      if(remoteTiles.has(rid)) return;
+      const tile=document.createElement("div");
+      tile.className="tile";
+      const v=document.createElement("video");
+      v.autoplay=true;v.playsInline=true;
+      const lab=document.createElement("div");
+      lab.className="label";lab.textContent=rid;
+      tile.appendChild(v);tile.appendChild(lab);
+      videos.appendChild(tile);
+      remoteTiles.set(rid,{tile,video:v});
+      const a=document.createElement("audio");
+      a.autoplay=true;
+      document.body.appendChild(a);
+      remoteAudio.set(rid,a);
+    }
+
+    function renderRemote(rid,stream){
+      const t=remoteTiles.get(rid);
+      if(t){
+        t.video.srcObject=stream;
+      }
+      const a=remoteAudio.get(rid);
+      if(a) a.srcObject=stream;
+    }
+
+    function removePeer(rid){
+      const pc=pcs.get(rid);
+      if(pc) try{pc.close();}catch(e){}
+      pcs.delete(rid);
+      remoteStreams.delete(rid);
+      const t=remoteTiles.get(rid);
+      if(t){t.tile.remove();}
+      remoteTiles.delete(rid);
+      const a=remoteAudio.get(rid);
+      if(a) a.remove();
+      remoteAudio.delete(rid);
+    }
+
+    async function startShare(){
+      try{
+        localScreen=await navigator.mediaDevices.getDisplayMedia({video:true,audio:true});
+        localScreen.getTracks().forEach(t=>{
+          t.onended=()=>stopShare();
+          pcs.forEach(pc=>pc.addTrack(t,localScreen));
+        });
+        localScreenEl.srcObject=localScreen;
+        shareBtn.textContent="STOP SHARE";
+        shareBtn.classList.add("off");
+        for(const rid of pcs.keys()) await renegotiate(rid);
+      }catch(e){}
+    }
+
+    function stopShare(){
+      if(!localScreen) return;
+      localScreen.getTracks().forEach(t=>{
+        pcs.forEach(pc=>{
+          const sender=pc.getSenders().find(s=>s.track===t);
+          if(sender) try{pc.removeTrack(sender);}catch(e){}
+        });
+        t.stop();
+      });
+      localScreen=null;
+      localScreenEl.srcObject=null;
+      shareBtn.textContent="SHARE SCREEN";
+      shareBtn.classList.remove("off");
+      for(const rid of pcs.keys()) renegotiate(rid);
+    }
+
+    function toggleMute(){
+      if(!localMic) return;
+      const enabled=localMic.getAudioTracks().some(t=>t.enabled);
+      localMic.getAudioTracks().forEach(t=>t.enabled=!enabled);
+      muteBtn.textContent=enabled?"UNMUTE":"MUTE MIC";
+      muteBtn.classList.toggle("off",enabled);
+    }
+
+    jbtn.onclick=joinRoom;
+    rin.addEventListener("keydown",e=>{if(e.key==="Enter") joinRoom();});
+    shareBtn.onclick=()=>{ if(localScreen) stopShare(); else startShare(); };
+    muteBtn.onclick=toggleMute;
+    leaveBtn.onclick=()=>location.reload();
+
+    form.onsubmit=e=>{
       e.preventDefault();
-      const t = msg.value.trim();
-      if(!t || !refm) return;
-      push(refm, {id, text:t, ts: serverTimestamp()});
-      msg.value = "";
+      const t=msg.value.trim();
+      if(!t) return;
+      push(ref(db,"rooms/"+room+"/chat"),{id,text:t,ts:serverTimestamp()});
+      msg.value="";
     };
   </script>
 </body>

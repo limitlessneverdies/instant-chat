@@ -101,6 +101,7 @@
     const remoteTiles=new Map();
     const remoteAudio=new Map();
     const seenChat=new Set();
+    const pendingCandidates=new Map();
 
     const joinEl=document.getElementById("join");
     const appdiv=document.getElementById("app");
@@ -129,7 +130,7 @@
 
     function mqttConnect(rm){
       const url="wss://broker.emqx.io:8084/mqtt";
-      client=mqtt.connect(url,{clientId:"wt-"+id,clean:true,will:{topic:`wt/${rm}/presence/${id}`,payload:"",qos:0,retain:true}});
+      client=mqtt.connect(url,{clientId:"wt-"+id,clean:true,keepalive:30,will:{topic:`wt/${rm}/presence/${id}`,payload:"",qos:0,retain:true}});
       client.on("connect",()=>{
         statusEl.textContent="connected";
         client.subscribe(`wt/${rm}/presence/+`);
@@ -184,6 +185,7 @@
 
     function ensurePeer(rid){
       if(pcs.has(rid)) return pcs.get(rid);
+      if(!pendingCandidates.has(rid)) pendingCandidates.set(rid,[]);
       const pc=new RTCPeerConnection(ICE);
       pcs.set(rid,pc);
       if(localMic) localMic.getTracks().forEach(t=>pc.addTrack(t,localMic));
@@ -227,13 +229,22 @@
       try{
         if(msg.type==="offer"){
           await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+          const queued=pendingCandidates.get(fromId)||[]; pendingCandidates.set(fromId,[]);
+          for(const c of queued) try{ await pc.addIceCandidate(new RTCIceCandidate(c)); }catch(e){}
           const ans=await pc.createAnswer();
           await pc.setLocalDescription(ans);
           sendSignal(fromId,"answer",pc.localDescription);
         } else if(msg.type==="answer"){
           await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
+          const queued=pendingCandidates.get(fromId)||[]; pendingCandidates.set(fromId,[]);
+          for(const c of queued) try{ await pc.addIceCandidate(new RTCIceCandidate(c)); }catch(e){}
         } else if(msg.type==="candidate"){
-          await pc.addIceCandidate(new RTCIceCandidate(msg.data));
+          if(!pc.remoteDescription){
+            if(!pendingCandidates.has(fromId)) pendingCandidates.set(fromId,[]);
+            pendingCandidates.get(fromId).push(msg.data);
+          } else {
+            try{ await pc.addIceCandidate(new RTCIceCandidate(msg.data)); }catch(e){}
+          }
         }
       }catch(e){}
     }
@@ -279,6 +290,7 @@
       if(pc) try{pc.close();}catch(e){}
       pcs.delete(rid);
       remoteStreams.delete(rid);
+      pendingCandidates.delete(rid);
       const t=remoteTiles.get(rid);
       if(t) t.tile.remove();
       remoteTiles.delete(rid);
